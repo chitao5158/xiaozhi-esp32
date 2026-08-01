@@ -82,9 +82,19 @@ void LvglDisplay::SetStatus(const char* status) {
     }
     lv_label_set_text(status_label_, status);
     lv_obj_remove_flag(status_label_, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(notification_label_, LV_OBJ_FLAG_HIDDEN);
+}
 
-    last_status_update_time_ = std::chrono::system_clock::now();
+void LvglDisplay::SetWeather(const char* weather) {
+    DisplayLockGuard lock(this);
+    if (weather_label_ == nullptr) {
+        return;  // Not all boards have a weather_label_ (e.g. tiny OLEDs); silently ignore.
+    }
+    if (weather == nullptr || weather[0] == '\0') {
+        lv_obj_add_flag(weather_label_, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    lv_label_set_text(weather_label_, weather);
+    lv_obj_remove_flag(weather_label_, LV_OBJ_FLAG_HIDDEN);
 }
 
 void LvglDisplay::ShowNotification(const std::string &notification, int duration_ms) {

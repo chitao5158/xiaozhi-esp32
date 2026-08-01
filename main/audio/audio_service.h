@@ -130,6 +130,11 @@ public:
     bool PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait = false);
     std::unique_ptr<AudioStreamPacket> PopPacketFromSendQueue();
     void PlaySound(const std::string_view& sound);
+    // Push raw PCM (int16) frames directly to the playback queue, bypassing
+    // the Opus decoder. Resamples to the codec's output sample rate if needed.
+    // `sample_rate` is the sample rate of the input PCM. Safe to call while
+    // the device is idle — the AudioOutputTask will pick the frames up.
+    void PlayRawPcm(const int16_t* data, size_t frames, int sample_rate);
     bool ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples);
     void ResetDecoder();
     void SetModelsList(srmodel_list_t* models_list);

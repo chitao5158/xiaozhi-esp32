@@ -36,6 +36,7 @@ set(SOURCES "audio/audio_codec.cc"
             "settings.cc"
             "device_state_machine.cc"
             "assets.cc"
+            "weather_service.cc"
             "main.cc"
             )
 
@@ -60,6 +61,10 @@ list(APPEND SOURCES
     "boards/common/sleep_timer.cc"
     "boards/common/sy6970.cc"
     "boards/common/system_reset.cc"
+    "boards/common/temperature_controller.cc"
+    "boards/common/local_tts.cc"
+    "boards/common/command_server.cc"
+    "boards/common/motor_controller.cc"
 )
 if(CONFIG_XIAOZHI_USE_ETHERNET)
     list(APPEND SOURCES "boards/common/ethernet_board.cc")

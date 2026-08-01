@@ -398,11 +398,30 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_flex_align(top_bar_, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_scrollbar_mode(top_bar_, LV_SCROLLBAR_MODE_OFF);
 
-    // Left icon
-    network_label_ = lv_label_create(top_bar_);
+    // Left icons container (network + weather) — keeps both on the left
+    // so they don't overlap the centered time in status_bar_.
+    lv_obj_t* left_icons = lv_obj_create(top_bar_);
+    lv_obj_set_size(left_icons, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(left_icons, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(left_icons, 0, 0);
+    lv_obj_set_style_pad_all(left_icons, 0, 0);
+    lv_obj_set_flex_flow(left_icons, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(left_icons, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    // Network icon (left of weather)
+    network_label_ = lv_label_create(left_icons);
     lv_label_set_text(network_label_, "");
     lv_obj_set_style_text_font(network_label_, icon_font, 0);
     lv_obj_set_style_text_color(network_label_, lvgl_theme->text_color(), 0);
+
+    // Weather label (right of network icon, left side). Hidden until first update.
+    // Use text_font so the degree symbol and Chinese description render properly.
+    weather_label_ = lv_label_create(left_icons);
+    lv_label_set_text(weather_label_, "");
+    lv_obj_set_style_text_font(weather_label_, text_font, 0);
+    lv_obj_set_style_text_color(weather_label_, lvgl_theme->text_color(), 0);
+    lv_obj_set_style_margin_left(weather_label_, lvgl_theme->spacing(2), 0);
+    lv_obj_add_flag(weather_label_, LV_OBJ_FLAG_HIDDEN);
 
     // Right icons container
     lv_obj_t* right_icons = lv_obj_create(top_bar_);
@@ -869,11 +888,30 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_scrollbar_mode(top_bar_, LV_SCROLLBAR_MODE_OFF);
     lv_obj_align(top_bar_, LV_ALIGN_TOP_MID, 0, 0);
 
-    // Left icon
-    network_label_ = lv_label_create(top_bar_);
+    // Left icons container (network + weather) — keeps both on the left
+    // so they don't overlap the centered time in status_bar_.
+    lv_obj_t* left_icons = lv_obj_create(top_bar_);
+    lv_obj_set_size(left_icons, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(left_icons, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(left_icons, 0, 0);
+    lv_obj_set_style_pad_all(left_icons, 0, 0);
+    lv_obj_set_flex_flow(left_icons, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(left_icons, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    // Network icon (left of weather)
+    network_label_ = lv_label_create(left_icons);
     lv_label_set_text(network_label_, "");
     lv_obj_set_style_text_font(network_label_, icon_font, 0);
     lv_obj_set_style_text_color(network_label_, lvgl_theme->text_color(), 0);
+
+    // Weather label (right of network icon, left side). Hidden until first update.
+    // Use text_font so the degree symbol and Chinese description render properly.
+    weather_label_ = lv_label_create(left_icons);
+    lv_label_set_text(weather_label_, "");
+    lv_obj_set_style_text_font(weather_label_, text_font, 0);
+    lv_obj_set_style_text_color(weather_label_, lvgl_theme->text_color(), 0);
+    lv_obj_set_style_margin_left(weather_label_, lvgl_theme->spacing(2), 0);
+    lv_obj_add_flag(weather_label_, LV_OBJ_FLAG_HIDDEN);
 
     // Right icons container
     lv_obj_t* right_icons = lv_obj_create(top_bar_);

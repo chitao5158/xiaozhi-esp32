@@ -23,7 +23,7 @@ v1の安定版は1.9.2です。`git checkout v1`でv1に切り替えることが
 ### 実装済み機能
 
 - Wi-Fi / ML307 Cat.1 4G
-- オフライン音声ウェイクアップ [ESP-SR](https://github.com/espressif/esp-sr)
+- オフライン音声ウェイクアップ [ESP-SR](https://github.com/espressif/esp-sr)、デフォルト起動ワード：**「嗨你好」**（`CONFIG_CUSTOM_WAKE_WORD` で変更可能）
 - 2種類の通信プロトコルに対応（[Websocket](docs/websocket.md) または MQTT+UDP）
 - OPUSオーディオコーデックを採用
 - ストリーミングASR + LLM + TTSアーキテクチャに基づく音声インタラクション

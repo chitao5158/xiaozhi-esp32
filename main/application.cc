@@ -9,6 +9,7 @@
 #include "mcp_server.h"
 #include "assets.h"
 #include "settings.h"
+#include "weather_service.h"
 
 #include <cstring>
 #include <esp_log.h>
@@ -160,6 +161,15 @@ void Application::Initialize() {
 
     // Update the status bar immediately to show the network state
     display->UpdateStatusBar(true);
+
+    // Start weather service (if enabled) - needs network, so kick off after StartNetwork().
+#if CONFIG_WEATHER_ENABLED
+    static WeatherService weather_service;
+    weather_service.OnUpdate([display](const std::string& weather) {
+        display->SetWeather(weather.c_str());
+    });
+    weather_service.Start();
+#endif
 }
 
 void Application::Run() {

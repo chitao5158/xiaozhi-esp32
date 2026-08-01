@@ -286,4 +286,16 @@
 // A MCP Test: Control a lamp
 #define LAMP_GPIO GPIO_NUM_18
 
+// NTC temperature sensor (W104 module) analog output on ADC1_CH0.
+// ADC1 is preferred because ADC2 is unavailable while Wi-Fi is running.
+// Pass GPIO_NUM_NC to disable the sensor entirely.
+#define TEMP_SENSOR_GPIO GPIO_NUM_1
+
+// L9110S single-channel motor driver. Two logic inputs: IA controls
+// forward (sign-magnitude PWM), IB controls reverse. Set either pin to
+// GPIO_NUM_NC if only one direction is wired (the matching side will
+// then be held low and only the other direction is usable).
+#define MOTOR_IA_GPIO GPIO_NUM_17
+#define MOTOR_IB_GPIO GPIO_NUM_8
+
 #endif // _BOARD_CONFIG_H_

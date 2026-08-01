@@ -653,6 +653,64 @@ void AudioService::PlaySound(const std::string_view& ogg) {
     demuxer->Process(buf, size);
 }
 
+void AudioService::PlayRawPcm(const int16_t* data, size_t frames, int sample_rate) {
+    if (codec_ == nullptr || frames == 0 || data == nullptr) {
+        return;
+    }
+
+    auto* codec = Board::GetInstance().GetAudioCodec();
+    if (codec == nullptr) {
+        return;
+    }
+    int output_rate = codec->output_sample_rate();
+    if (output_rate <= 0) {
+        output_rate = sample_rate;
+    }
+
+    // Linear-interpolation resampler: input rate -> codec output rate. Good
+    // enough for short TTS clips; we don't need a fancy filter for speech.
+    std::vector<int16_t> resampled;
+    if (sample_rate == output_rate) {
+        resampled.assign(data, data + frames);
+    } else {
+        size_t out_frames = (size_t)((int64_t)frames * output_rate / sample_rate);
+        resampled.resize(out_frames);
+        for (size_t i = 0; i < out_frames; ++i) {
+            float src_idx = (float)i * (float)sample_rate / (float)output_rate;
+            size_t i0 = (size_t)src_idx;
+            size_t i1 = std::min(i0 + 1, frames - 1);
+            float frac = src_idx - (float)i0;
+            float v = (float)data[i0] * (1.0f - frac) + (float)data[i1] * frac;
+            int s = (int)(v + (v >= 0 ? 0.5f : -0.5f));
+            if (s > 32767) s = 32767;
+            if (s < -32768) s = -32768;
+            resampled[i] = (int16_t)s;
+        }
+    }
+
+    // Wake the output peripheral and refresh the power-save timer so the
+    // codec doesn't idle-disable while we're queueing.
+    if (!codec_->output_enabled()) {
+        esp_timer_stop(audio_power_timer_);
+        esp_timer_start_periodic(audio_power_timer_, AUDIO_POWER_CHECK_INTERVAL_MS * 1000);
+        codec_->EnableOutput(true);
+    }
+
+    // Slice into ~60ms chunks (matches the decoder's frame size so the
+    // AudioOutputTask drains them at a steady cadence).
+    constexpr size_t kFramesPerTask = 1440;  // 60ms at 24 kHz
+    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    for (size_t offset = 0; offset < resampled.size(); offset += kFramesPerTask) {
+        size_t chunk = std::min(kFramesPerTask, resampled.size() - offset);
+        auto task = std::make_unique<AudioTask>();
+        task->type = kAudioTaskTypeDecodeToPlaybackQueue;
+        task->pcm.assign(resampled.begin() + offset,
+                          resampled.begin() + offset + chunk);
+        audio_playback_queue_.push_back(std::move(task));
+    }
+    audio_queue_cv_.notify_all();
+}
+
 bool AudioService::IsIdle() {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
     return audio_encode_queue_.empty() && audio_decode_queue_.empty() && audio_playback_queue_.empty() && audio_testing_queue_.empty();

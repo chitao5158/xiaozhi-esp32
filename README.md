@@ -23,7 +23,7 @@ The stable version of v1 is 1.9.2. You can switch to v1 by running `git checkout
 ### Features Implemented
 
 - Wi-Fi / ML307 Cat.1 4G
-- Offline voice wake-up [ESP-SR](https://github.com/espressif/esp-sr)
+- Offline voice wake-up [ESP-SR](https://github.com/espressif/esp-sr), default wake word: **"嗨你好"** (configurable via `CONFIG_CUSTOM_WAKE_WORD`)
 - Supports two communication protocols ([Websocket](docs/websocket.md) or MQTT+UDP)
 - Uses OPUS audio codec
 - Voice interaction based on streaming ASR + LLM + TTS architecture

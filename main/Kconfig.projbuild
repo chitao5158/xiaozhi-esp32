@@ -1076,4 +1076,53 @@ menu "TAIJIPAI_S3_CONFIG"
         启动双声道
 endmenu
 
+menu "Weather Display"
+    config WEATHER_ENABLED
+        bool "Enable weather display in status bar"
+        default n
+        help
+            Enable weather information display in the top status bar.
+            Select provider below (OpenWeatherMap or QWeather).
+
+    choice WEATHER_PROVIDER
+        prompt "Weather provider"
+        default WEATHER_PROVIDER_QWEATHER
+        depends on WEATHER_ENABLED
+        help
+            Choose the weather data provider.
+        config WEATHER_PROVIDER_OPENWEATHERMAP
+            bool "OpenWeatherMap (global, may be slow/blocked in China)"
+        config WEATHER_PROVIDER_QWEATHER
+            bool "QWeather 和风天气 (China-friendly, recommended)"
+    endchoice
+
+    config WEATHER_API_KEY
+        string "Weather API Key"
+        default ""
+        depends on WEATHER_ENABLED
+        help
+            OpenWeatherMap: get a free API key from https://openweathermap.org/api
+            QWeather: get a free key from https://dev.qweather.com/
+            NOTE: Keep this confidential. Do not commit to public repos.
+
+    config WEATHER_CITY
+        string "Weather location (city name or location ID)"
+        default "101210101"
+        depends on WEATHER_ENABLED
+        help
+            OpenWeatherMap: city name (English), e.g. "Beijing", "Shanghai".
+            QWeather: 9-digit Location ID, e.g. "101210101" for Hangzhou.
+            See https://github.com/qwd/LocationList for QWeather codes.
+
+    config WEATHER_UPDATE_INTERVAL_MINUTES
+        int "Weather update interval (minutes)"
+        default 30
+        range 5 1440
+        depends on WEATHER_ENABLED
+        help
+            How often to refresh weather data. Default 30 minutes.
+            Minimum 5 minutes to avoid API rate limits.
+
+endmenu
+
 endmenu
