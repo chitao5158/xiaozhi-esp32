@@ -26,7 +26,17 @@ SingleLed::SingleLed(gpio_num_t gpio) {
     led_strip_rmt_config_t rmt_config = {};
     rmt_config.resolution_hz = 10 * 1000 * 1000; // 10MHz
 
-    ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip_));
+    // ESP-IDF RMT channel pool is finite (4 TX + 4 RX on ESP32-S3). If a
+    // higher-priority component (e.g. IrController) has already claimed
+    // every TX channel, led_strip_new_rmt_device returns ESP_ERR_NOT_FOUND.
+    // Tolerate that gracefully — boards without a status LED don't care,
+    // and the rest of the system still works.
+    esp_err_t strip_err = led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip_);
+    if (strip_err != ESP_OK) {
+        ESP_LOGE(TAG, "led_strip init failed (%s) — status LED will not function",
+                 esp_err_to_name(strip_err));
+        return;
+    }
     led_strip_clear(led_strip_);
 
     esp_timer_create_args_t blink_timer_args = {
