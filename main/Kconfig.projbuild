@@ -942,6 +942,16 @@ config USE_AUDIO_DEBUGGER
     help
         Enable audio debugger, send audio data through UDP to the host machine
 
+config USE_IR_CONTROLLER
+    bool "Enable IR controller (learn + replay 38 kHz remote signals)"
+    default y
+    help
+        Captures raw RMT symbol timing from a 38 kHz IR receiver and stores
+        it in NVS. Replays via a 38 kHz-modulated TX GPIO. Works for any
+        protocol (NEC, RC5, AC proprietary) as long as the user has the
+        original remote to teach each button once. RX/TX GPIOs are set
+        per-board via IR_RX_GPIO / IR_TX_GPIO in the board's config.h.
+
 menu "WiFi Configuration Method"
     help
         WiFi Configuration Method Selection

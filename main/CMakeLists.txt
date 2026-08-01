@@ -65,6 +65,7 @@ list(APPEND SOURCES
     "boards/common/local_tts.cc"
     "boards/common/command_server.cc"
     "boards/common/motor_controller.cc"
+    "boards/common/ir_controller.cc"
 )
 if(CONFIG_XIAOZHI_USE_ETHERNET)
     list(APPEND SOURCES "boards/common/ethernet_board.cc")

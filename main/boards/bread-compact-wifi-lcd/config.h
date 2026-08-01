@@ -298,4 +298,9 @@
 #define MOTOR_IA_GPIO GPIO_NUM_17
 #define MOTOR_IB_GPIO GPIO_NUM_8
 
+// IR receiver (e.g. HS0038 / VS1838B) OUT pin and IR LED anode (via a
+// 33-100 Ω resistor to GPIO). GPIO_NUM_NC disables that direction.
+#define IR_RX_GPIO GPIO_NUM_2
+#define IR_TX_GPIO GPIO_NUM_12
+
 #endif // _BOARD_CONFIG_H_

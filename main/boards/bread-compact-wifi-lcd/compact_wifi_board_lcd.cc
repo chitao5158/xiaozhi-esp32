@@ -16,6 +16,7 @@
 #include <freertos/task.h>
 #include "command_server.h"
 #include "local_tts.h"
+#include "ir_controller.h"
 #include "led/single_led.h"
 
 #include <esp_log.h>
@@ -250,6 +251,15 @@ private:
         // PwmBacklight on LEDC_TIMER_0/CHANNEL_0.
         static MotorController motor(MOTOR_IA_GPIO, MOTOR_IB_GPIO,
                                      LEDC_TIMER_1, LEDC_CHANNEL_1, LEDC_CHANNEL_2);
+
+#if CONFIG_USE_IR_CONTROLLER
+        // Capture / replay 38 kHz IR remote signals for AC / TV control.
+        // Pin configuration lives in config.h — set either GPIO to
+        // GPIO_NUM_NC to disable that direction.
+        static IrController& ir = IrController::GetInstance();
+        static int ir_init_once = (ir.Configure(IR_RX_GPIO, IR_TX_GPIO), 0);
+        (void)ir_init_once;
+#endif
 
         // When MCP self.temperature.schedule_announcement fires, this callback
         // runs on the main task via app.Schedule(). We do only the FAST
