@@ -140,6 +140,11 @@ bool IrController::AcquireTx() {
 
 void IrController::ReleaseRx() {
     if (rx_handle_ != nullptr) {
+        // ESP-IDF v5.5: del_channel requires the channel to be back in the
+        // init state. rmt_disable transitions enabled -> init; without
+        // it, rmt_del_channel logs "channel not in init state" and leaks
+        // the handle until next reboot.
+        rmt_disable(reinterpret_cast<rmt_channel_handle_t>(rx_handle_));
         rmt_del_channel(reinterpret_cast<rmt_channel_handle_t>(rx_handle_));
         rx_handle_ = nullptr;
         ESP_LOGI(TAG, "RX channel released");
@@ -152,6 +157,7 @@ void IrController::ReleaseTx() {
         copy_encoder_ = nullptr;
     }
     if (tx_handle_ != nullptr) {
+        rmt_disable(reinterpret_cast<rmt_channel_handle_t>(tx_handle_));
         rmt_del_channel(reinterpret_cast<rmt_channel_handle_t>(tx_handle_));
         tx_handle_ = nullptr;
         ESP_LOGI(TAG, "TX channel released");
