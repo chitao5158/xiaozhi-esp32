@@ -131,11 +131,16 @@ bool IrController::AcquireTx() {
         tx_handle_ = nullptr;
         return false;
     }
+    // KY-005 (cheap variant) drives the IR LED when its signal pin is LOW
+    // (LED anode tied to VCC, cathode to the signal pin). Flip the carrier
+    // polarity so RMT pulls the pin low while modulating 38 kHz — that
+    // makes the LED emit light during the mark periods, matching what
+    // the HS0038 receiver expects.
     rmt_carrier_config_t carrier_cfg = {
         .frequency_hz = kCarrierHz,
         .duty_cycle   = 0.33f,
         .flags = {
-            .polarity_active_low = false,
+            .polarity_active_low = true,
         },
     };
     if (rmt_apply_carrier(reinterpret_cast<rmt_channel_handle_t>(tx_handle_),
