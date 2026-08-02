@@ -48,6 +48,11 @@ public:
     // Returns a short human-readable summary string.
     std::string Test(uint32_t rx_timeout_ms = 3000);
 
+    // Drive IR_TX_GPIO with a continuous 38 kHz square wave for 5 s via
+    // LEDC hardware. Bypasses the RMT TX path entirely so we can tell
+    // "RMT carrier config stuck" from "GPIO actually broken".
+    void ProbeTx38kHzContinuous();
+
     // Delete a single signal. Returns true if it existed.
     bool Delete(const std::string& name);
 

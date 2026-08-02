@@ -5,6 +5,7 @@
 #include <esp_log.h>
 #include <esp_heap_caps.h>
 #include <driver/gpio.h>
+#include <driver/ledc.h>
 #include <driver/rmt_rx.h>
 #include <driver/rmt_tx.h>
 #include <driver/rmt_common.h>
@@ -587,6 +588,57 @@ std::string IrController::Test(uint32_t rx_timeout_ms) {
 }
 
 // ---------------------------------------------------------------------------
+// LEDC-driven continuous 38 kHz on the TX pin for 5 s. Bypasses the RMT
+// TX path entirely — useful for separating "RMT config stuck" from
+// "GPIO output really broken" with a multimeter or phone camera.
+// LEDC_TIMER_2 + LEDC_CHANNEL_3 are unused on bread-compact-wifi-lcd
+// (timer 0/1 and channel 0/1/2 are taken by backlight + motor).
+// ---------------------------------------------------------------------------
+
+static void probe_tx_stop_task(void* arg) {
+    ledc_timer_t timer = (ledc_timer_t)(intptr_t)arg;
+    vTaskDelay(pdMS_TO_TICKS(5000));
+    ledc_stop(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3, 0);
+    ledc_timer_pause(LEDC_LOW_SPEED_MODE, timer);
+    ESP_LOGI("IrCtrl", "Probe TX: 38 kHz stopped");
+    vTaskDelete(nullptr);
+}
+
+void IrController::ProbeTx38kHzContinuous() {
+    if (tx_gpio_ == GPIO_NUM_NC) {
+        ESP_LOGE(TAG, "TX GPIO not configured");
+        return;
+    }
+    ledc_timer_config_t timer_cfg = {
+        .speed_mode      = LEDC_LOW_SPEED_MODE,
+        .duty_resolution = LEDC_TIMER_1_BIT,
+        .timer_num       = LEDC_TIMER_2,
+        .freq_hz         = kCarrierHz,
+        .clk_cfg         = LEDC_AUTO_CLK,
+    };
+    if (ledc_timer_config(&timer_cfg) != ESP_OK) {
+        ESP_LOGE(TAG, "LEDC timer config failed");
+        return;
+    }
+    ledc_channel_config_t ch_cfg = {
+        .gpio_num   = tx_gpio_,
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .channel    = LEDC_CHANNEL_3,
+        .timer_sel  = LEDC_TIMER_2,
+        .duty       = 1,  // 1 bit @ 38 kHz → ~50% duty
+        .hpoint     = 0,
+        .flags      = { .output_invert = 0 },
+    };
+    if (ledc_channel_config(&ch_cfg) != ESP_OK) {
+        ESP_LOGE(TAG, "LEDC channel config failed");
+        return;
+    }
+    ESP_LOGI(TAG, "Probe TX: 38 kHz continuous on GPIO %d for 5 s", (int)tx_gpio_);
+    xTaskCreate(probe_tx_stop_task, "ir_probe_tx_stop",
+                2048, (void*)(intptr_t)LEDC_TIMER_2, 4, nullptr);
+}
+
+// ---------------------------------------------------------------------------
 // MCP tools
 // ---------------------------------------------------------------------------
 
@@ -657,5 +709,18 @@ void IrController::RegisterMcpTools() {
         [this](const PropertyList& properties) -> ReturnValue {
             int timeout = properties["rx_timeout_ms"].value<int>();
             return Test(static_cast<uint32_t>(timeout));
+        });
+
+    mcp.AddTool(
+        "self.ir.probe_tx",
+        "Drive the IR TX GPIO with a continuous 38 kHz square wave for "
+        "5 seconds via LEDC hardware. Bypasses RMT entirely so we can "
+        "distinguish a stuck RMT config from a broken GPIO. Measure the "
+        "GPIO with a multimeter during the 5 s window — DC voltage "
+        "should read ~1.7 V (50% duty of 3.3 V) or ~2.5 V (active-low).",
+        PropertyList(),
+        [this](const PropertyList&) -> ReturnValue {
+            ProbeTx38kHzContinuous();
+            return std::string("OK: 38 kHz continuous on TX GPIO for 5 s — measure now");
         });
 }
