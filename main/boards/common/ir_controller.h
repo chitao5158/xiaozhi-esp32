@@ -58,8 +58,14 @@ private:
     IrController(const IrController&) = delete;
     IrController& operator=(const IrController&) = delete;
 
-    void InitRx();
-    void InitTx();
+    // Lazy RMT init — claim the channel only when Learn/Send is called and
+    // release it immediately after. Avoids colliding with led_strip and
+    // other consumers that hold RMT channels for the lifetime of the app.
+    bool AcquireRx();
+    bool AcquireTx();
+    void ReleaseRx();
+    void ReleaseTx();
+
     void RegisterMcpTools();
 
     gpio_num_t rx_gpio_ = GPIO_NUM_NC;

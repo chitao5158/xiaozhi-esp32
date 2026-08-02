@@ -29,39 +29,40 @@ IrController& IrController::GetInstance() {
 }
 
 // ---------------------------------------------------------------------------
-// Configuration / init
+// Configuration — only stores GPIOs, does NOT touch RMT (lazy).
 // ---------------------------------------------------------------------------
 
 void IrController::Configure(gpio_num_t rx_gpio, gpio_num_t tx_gpio) {
     rx_gpio_ = rx_gpio;
     tx_gpio_ = tx_gpio;
 
-    if (rx_gpio_ != GPIO_NUM_NC) {
-        InitRx();
-    } else {
-        ESP_LOGW(TAG, "RX GPIO is NC — learn disabled");
-    }
-    if (tx_gpio_ != GPIO_NUM_NC) {
-        InitTx();
-    } else {
-        ESP_LOGW(TAG, "TX GPIO is NC — send disabled");
-    }
-
     if (!tools_registered_) {
         RegisterMcpTools();
         tools_registered_ = true;
     }
-
-    ESP_LOGI(TAG, "Configured: RX=GPIO%d TX=GPIO%d (rx_ok=%d tx_ok=%d)",
-             (int)rx_gpio_, (int)tx_gpio_, HasRx(), HasTx());
+    ESP_LOGI(TAG, "Configured: RX=GPIO%d TX=GPIO12 (lazy RMT)",
+             (int)rx_gpio_, (int)tx_gpio_);
 }
 
-void IrController::InitRx() {
-    rx_buffer_ = heap_caps_malloc(kMaxSymbols * sizeof(rmt_symbol_word_t),
-                                  MALLOC_CAP_INTERNAL);
+// ---------------------------------------------------------------------------
+// Lazy RMT channel acquisition. Released as soon as the operation finishes
+// so led_strip and other consumers can claim the channel between calls.
+// ---------------------------------------------------------------------------
+
+bool IrController::AcquireRx() {
+    if (rx_handle_ != nullptr) return true;
+    if (rx_gpio_ == GPIO_NUM_NC) {
+        ESP_LOGE(TAG, "RX GPIO not configured");
+        return false;
+    }
+
     if (rx_buffer_ == nullptr) {
-        ESP_LOGE(TAG, "RX buffer alloc failed");
-        return;
+        rx_buffer_ = heap_caps_malloc(kMaxSymbols * sizeof(rmt_symbol_word_t),
+                                      MALLOC_CAP_INTERNAL);
+        if (rx_buffer_ == nullptr) {
+            ESP_LOGE(TAG, "RX buffer alloc failed");
+            return false;
+        }
     }
 
     rmt_rx_channel_config_t rx_cfg = {
@@ -72,24 +73,21 @@ void IrController::InitRx() {
         .intr_priority     = 0,
     };
     if (rmt_new_rx_channel(&rx_cfg, reinterpret_cast<rmt_channel_handle_t*>(&rx_handle_)) != ESP_OK) {
-        ESP_LOGE(TAG, "rmt_new_rx_channel failed");
-        return;
+        ESP_LOGE(TAG, "rmt_new_rx_channel failed (channel pool exhausted?)");
+        rx_handle_ = nullptr;
+        return false;
     }
-    // Carrier is demodulated inside the receiver module, so no extra RX filter.
-    rmt_receive_config_t recv_cfg = {
-        .signal_range_min_ns = 1000000,   // reject pulses < 1 ms (noise)
-        .signal_range_max_ns = 20000000,  // reject pulses > 20 ms (also noise)
-    };
-    if (rmt_receive(reinterpret_cast<rmt_channel_handle_t>(rx_handle_),
-                    rx_buffer_, kMaxSymbols * sizeof(rmt_symbol_word_t),
-                    &recv_cfg) != ESP_OK) {
-        ESP_LOGE(TAG, "rmt_receive failed");
-        return;
-    }
-    ESP_LOGI(TAG, "RX ready on GPIO %d", (int)rx_gpio_);
+    ESP_LOGI(TAG, "RX channel acquired");
+    return true;
 }
 
-void IrController::InitTx() {
+bool IrController::AcquireTx() {
+    if (tx_handle_ != nullptr && copy_encoder_ != nullptr) return true;
+    if (tx_gpio_ == GPIO_NUM_NC) {
+        ESP_LOGE(TAG, "TX GPIO not configured");
+        return false;
+    }
+
     rmt_tx_channel_config_t tx_cfg = {
         .gpio_num          = tx_gpio_,
         .clk_src           = RMT_CLK_SRC_DEFAULT,
@@ -100,11 +98,12 @@ void IrController::InitTx() {
     };
     if (rmt_new_tx_channel(&tx_cfg, reinterpret_cast<rmt_channel_handle_t*>(&tx_handle_)) != ESP_OK) {
         ESP_LOGE(TAG, "rmt_new_tx_channel failed");
-        return;
+        tx_handle_ = nullptr;
+        return false;
     }
     rmt_carrier_config_t carrier_cfg = {
         .frequency_hz = kCarrierHz,
-        .duty_cycle   = 0.33f,    // 33 % is the typical IR remote ratio
+        .duty_cycle   = 0.33f,
         .flags = {
             .polarity_active_low = false,
         },
@@ -117,19 +116,38 @@ void IrController::InitTx() {
     if (rmt_new_copy_encoder(&copy_cfg,
                              reinterpret_cast<rmt_encoder_handle_t*>(&copy_encoder_)) != ESP_OK) {
         ESP_LOGE(TAG, "rmt_new_copy_encoder failed");
+        ReleaseTx();
+        return false;
     }
-    ESP_LOGI(TAG, "TX ready on GPIO %d", (int)tx_gpio_);
+    ESP_LOGI(TAG, "TX channel acquired");
+    return true;
+}
+
+void IrController::ReleaseRx() {
+    if (rx_handle_ != nullptr) {
+        rmt_del_channel(reinterpret_cast<rmt_channel_handle_t>(rx_handle_));
+        rx_handle_ = nullptr;
+        ESP_LOGI(TAG, "RX channel released");
+    }
+}
+
+void IrController::ReleaseTx() {
+    if (copy_encoder_ != nullptr) {
+        rmt_del_encoder(reinterpret_cast<rmt_encoder_handle_t>(copy_encoder_));
+        copy_encoder_ = nullptr;
+    }
+    if (tx_handle_ != nullptr) {
+        rmt_del_channel(reinterpret_cast<rmt_channel_handle_t>(tx_handle_));
+        tx_handle_ = nullptr;
+        ESP_LOGI(TAG, "TX channel released");
+    }
 }
 
 // ---------------------------------------------------------------------------
-// Learn (RX) — blocking call up to timeout_ms
+// Learn (RX) — acquires RX channel, blocks up to timeout_ms, releases.
 // ---------------------------------------------------------------------------
 
 bool IrController::Learn(const std::string& name, uint32_t timeout_ms) {
-    if (!HasRx()) {
-        ESP_LOGE(TAG, "RX not configured");
-        return false;
-    }
     if (name.empty() || name.size() > kMaxNameLen) {
         ESP_LOGE(TAG, "Name must be 1..%zu chars", kMaxNameLen);
         return false;
@@ -141,9 +159,11 @@ bool IrController::Learn(const std::string& name, uint32_t timeout_ms) {
     }
     auto restore = [&]() { learning_.store(false); };
 
-    // Arm a fresh receive. The previous rx_buffer_ may still hold stale data
-    // if a previous Learn timed out; overwriting it is fine because we only
-    // read on the done callback.
+    if (!AcquireRx()) {
+        restore();
+        return false;
+    }
+
     rmt_receive_config_t recv_cfg = {
         .signal_range_min_ns = 1000000,
         .signal_range_max_ns = 20000000,
@@ -153,6 +173,7 @@ bool IrController::Learn(const std::string& name, uint32_t timeout_ms) {
                                 &recv_cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "rmt_receive arm failed: %s", esp_err_to_name(err));
+        ReleaseRx();
         restore();
         return false;
     }
@@ -160,20 +181,11 @@ bool IrController::Learn(const std::string& name, uint32_t timeout_ms) {
     ESP_LOGI(TAG, "Learning '%s' — point your remote at the receiver now "
                   "(timeout %lu ms)", name.c_str(), (unsigned long)timeout_ms);
 
-    // Poll for completion by checking num_symbols indirectly: spin-sleep with
-    // short delay until the configured timeout. This avoids needing an ISR
-    // callback + semaphore for a POC. Latency is ~10 ms which is invisible
-    // compared to a button press.
     const TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(timeout_ms);
-    // Give the receiver a 200 ms head start for the first edge to arrive —
-    // without this we'd loop tightly when the user hasn't pressed yet.
     const TickType_t head_start = xTaskGetTickCount() + pdMS_TO_TICKS(200);
     bool got_signal = false;
     while (xTaskGetTickCount() < deadline) {
         if (xTaskGetTickCount() >= head_start) {
-            // Inspect last symbol: if duration0 or duration1 is non-zero,
-            // something was captured. The RMT driver updates the buffer
-            // in place as symbols arrive, so this is a valid liveness check.
             auto* syms = reinterpret_cast<rmt_symbol_word_t*>(rx_buffer_);
             if (syms[0].val != 0) {
                 got_signal = true;
@@ -183,6 +195,7 @@ bool IrController::Learn(const std::string& name, uint32_t timeout_ms) {
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 
+    ReleaseRx();
     restore();
 
     if (!got_signal) {
@@ -190,7 +203,6 @@ bool IrController::Learn(const std::string& name, uint32_t timeout_ms) {
         return false;
     }
 
-    // Count non-zero trailing symbols (RMT fills buffer until done / overflow).
     auto* syms = reinterpret_cast<rmt_symbol_word_t*>(rx_buffer_);
     size_t count = 0;
     for (size_t i = 0; i < kMaxSymbols; i++) {
@@ -203,8 +215,6 @@ bool IrController::Learn(const std::string& name, uint32_t timeout_ms) {
     }
     ESP_LOGI(TAG, "Captured %zu symbols", count);
 
-    // Serialize: [count: uint16_t][symbols...]. NVS blob max is ~64 KB; one
-    // signal is <1 KB so we can store hundreds before hitting limits.
     std::vector<uint8_t> blob(sizeof(uint16_t) + count * sizeof(rmt_symbol_word_t));
     uint16_t count_le = (uint16_t)count;
     memcpy(blob.data(), &count_le, sizeof(count_le));
@@ -227,14 +237,10 @@ bool IrController::Learn(const std::string& name, uint32_t timeout_ms) {
 }
 
 // ---------------------------------------------------------------------------
-// Send (TX)
+// Send (TX) — acquires TX channel, plays, releases.
 // ---------------------------------------------------------------------------
 
 bool IrController::Send(const std::string& name, uint32_t repeats) {
-    if (!HasTx()) {
-        ESP_LOGE(TAG, "TX not configured");
-        return false;
-    }
     if (repeats == 0) repeats = 1;
 
     nvs_handle_t nvs;
@@ -269,32 +275,37 @@ bool IrController::Send(const std::string& name, uint32_t repeats) {
     const rmt_symbol_word_t* syms =
         reinterpret_cast<const rmt_symbol_word_t*>(blob.data() + sizeof(uint16_t));
 
+    if (!AcquireTx()) {
+        return false;
+    }
+
     ESP_LOGI(TAG, "Sending '%s' (%u symbols, x%lu)",
              name.c_str(), (unsigned)count, (unsigned long)repeats);
 
     rmt_transmit_config_t tx_cfg = {
-        .loop_count = 0,            // no per-call looping; we drive repeats manually
+        .loop_count = 0,
         .flags = {
-            .eot_level = 0,         // carrier off between frames
+            .eot_level = 0,
             .queue_nonblocking = false,
         },
     };
     auto* tx = reinterpret_cast<rmt_channel_handle_t>(tx_handle_);
     auto* enc = reinterpret_cast<rmt_encoder_handle_t>(copy_encoder_);
+    bool ok = true;
     for (uint32_t i = 0; i < repeats; i++) {
         if (rmt_transmit(tx, enc, syms, count * sizeof(rmt_symbol_word_t), &tx_cfg) != ESP_OK) {
             ESP_LOGE(TAG, "rmt_transmit failed on repeat %lu", (unsigned long)i);
-            return false;
+            ok = false;
+            break;
         }
-        // Wait for the previous transmit to fully drain before queuing the
-        // next, otherwise the copy encoder can re-enter with stale state.
         if (rmt_tx_wait_all_done(tx, pdMS_TO_TICKS(200)) != ESP_OK) {
             ESP_LOGW(TAG, "rmt_tx_wait_all_done timed out on repeat %lu", (unsigned long)i);
         }
-        // 40 ms inter-frame gap matches typical AC remote conventions.
         vTaskDelay(pdMS_TO_TICKS(40));
     }
-    return true;
+
+    ReleaseTx();
+    return ok;
 }
 
 // ---------------------------------------------------------------------------
