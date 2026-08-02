@@ -87,6 +87,17 @@ bool IrController::AcquireRx() {
         rx_handle_ = nullptr;
         return false;
     }
+    // Enable 38 kHz carrier demodulation on the RX channel. Without this,
+    // RMT samples the raw GPIO waveform — which for a 38 kHz IR receiver
+    // is a 13 µs on/off pulse stream, blowing through the 64-symbol buffer
+    // in ~1.6 ms. Demodulation extracts the baseband signal so the buffer
+    // captures the actual NEC/Coolix timing.
+    rmt_carrier_config_t rx_carrier = {
+        .frequency_hz = kCarrierHz,
+        .duty_cycle   = 0.33f,
+        .flags = { .polarity_active_low = false },
+    };
+    rmt_apply_carrier(reinterpret_cast<rmt_channel_handle_t>(rx_handle_), &rx_carrier);
     // Override the pull-up that the RMT driver enables internally
     // (`gpio_pullup_en` in rmt_rx.c around line 295). Combined with the
     // HS0038 receiver's own ~22 kΩ pull-up, the parallel resistance fights
