@@ -53,6 +53,11 @@ public:
     // "RMT carrier config stuck" from "GPIO actually broken".
     void ProbeTx38kHzContinuous();
 
+    // Drive IR_TX_GPIO directly via gpio_set_level (no LEDC, no RMT).
+    // mode: 0=LOW, 1=HIGH, 2=50 Hz toggle for 5 s. Used to verify the
+    // GPIO itself is functional — independent of any peripheral config.
+    void ProbeGpioRaw(int mode);
+
     // Delete a single signal. Returns true if it existed.
     bool Delete(const std::string& name);
 

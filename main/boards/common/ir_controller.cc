@@ -639,6 +639,52 @@ void IrController::ProbeTx38kHzContinuous() {
 }
 
 // ---------------------------------------------------------------------------
+// Drive IR_TX_GPIO directly via gpio_set_level — no LEDC, no RMT, no
+// carrier. Used to verify the bare GPIO pin works. Runs for 5 s then
+// releases the pin back to floating.
+// ---------------------------------------------------------------------------
+
+static void probe_gpio_stop_task(void* arg) {
+    gpio_num_t pin = (gpio_num_t)(intptr_t)arg;
+    vTaskDelay(pdMS_TO_TICKS(5000));
+    gpio_reset_pin(pin);
+    ESP_LOGI("IrCtrl", "Probe GPIO: pin released");
+    vTaskDelete(nullptr);
+}
+
+void IrController::ProbeGpioRaw(int mode) {
+    if (tx_gpio_ == GPIO_NUM_NC) {
+        ESP_LOGE(TAG, "TX GPIO not configured");
+        return;
+    }
+    gpio_reset_pin(tx_gpio_);
+    gpio_set_direction(tx_gpio_, GPIO_MODE_OUTPUT);
+    if (mode == 0) {
+        gpio_set_level(tx_gpio_, 0);
+        ESP_LOGI(TAG, "Probe GPIO: LOW on GPIO %d for 5 s — multimeter should read 0 V", (int)tx_gpio_);
+    } else if (mode == 1) {
+        gpio_set_level(tx_gpio_, 1);
+        ESP_LOGI(TAG, "Probe GPIO: HIGH on GPIO %d for 5 s — multimeter should read 3.3 V", (int)tx_gpio_);
+    } else {
+        // mode == 2: 50 Hz toggle via simple busy wait — 5 s of ~10 ms period
+        ESP_LOGI(TAG, "Probe GPIO: 50 Hz toggle on GPIO %d for 5 s", (int)tx_gpio_);
+        int64_t deadline = esp_timer_get_time() + 5 * 1000 * 1000;
+        while (esp_timer_get_time() < deadline) {
+            gpio_set_level(tx_gpio_, 1);
+            esp_rom_delay_us(10000);
+            gpio_set_level(tx_gpio_, 0);
+            esp_rom_delay_us(10000);
+        }
+        ESP_LOGI(TAG, "Probe GPIO: toggle done");
+        gpio_reset_pin(tx_gpio_);
+        return;
+    }
+    // For LOW/HIGH modes, spawn a 5 s stop task to release the pin.
+    xTaskCreate(probe_gpio_stop_task, "ir_probe_gpio_stop",
+                2048, (void*)(intptr_t)tx_gpio_, 4, nullptr);
+}
+
+// ---------------------------------------------------------------------------
 // MCP tools
 // ---------------------------------------------------------------------------
 
@@ -722,5 +768,20 @@ void IrController::RegisterMcpTools() {
         [this](const PropertyList&) -> ReturnValue {
             ProbeTx38kHzContinuous();
             return std::string("OK: 38 kHz continuous on TX GPIO for 5 s — measure now");
+        });
+
+    mcp.AddTool(
+        "self.ir.probe_gpio",
+        "Drive IR TX GPIO directly via gpio_set_level — no LEDC, no RMT. "
+        "mode: 0=LOW, 1=HIGH, 2=50 Hz toggle. 5 second test. Measure "
+        "the GPIO with a multimeter. mode=1 should read 3.3 V — if not, "
+        "the GPIO pin or KY-005 module is broken.",
+        PropertyList({Property("mode", kPropertyTypeInteger, 0, 2)}),
+        [this](const PropertyList& properties) -> ReturnValue {
+            int mode = properties["mode"].value<int>();
+            ProbeGpioRaw(mode);
+            char buf[64];
+            snprintf(buf, sizeof(buf), "OK: mode=%d running for 5 s — measure now", mode);
+            return std::string(buf);
         });
 }
