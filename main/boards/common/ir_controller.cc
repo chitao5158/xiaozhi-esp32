@@ -78,13 +78,6 @@ bool IrController::AcquireRx() {
         rx_handle_ = nullptr;
         return false;
     }
-    // ESP32-S3 GPIO defaults to internal pull-up enabled. Combined with the
-    // HS0038 receiver's own pull-up (~22 kΩ), the parallel resistance fights
-    // the receiver's pull-down transistor so the "low" level only reaches
-    // ~2.6 V instead of 0 V — still above the 0.825 V high threshold, so
-    // RMT never sees a falling edge. Disable the internal pull-up; let the
-    // receiver's own pull-up define the idle level.
-    gpio_set_pull_mode(rx_gpio_, GPIO_FLOATING);
     // ESP-IDF v5.5+ RMT API requires explicit enable before receive. Without
     // this, rmt_receive() fails with "channel not in enable state" (esp_err
     // 0x3007 / ESP_ERR_INVALID_STATE).
@@ -94,6 +87,15 @@ bool IrController::AcquireRx() {
         rx_handle_ = nullptr;
         return false;
     }
+    // Override the pull-up that the RMT driver enables internally
+    // (`gpio_pullup_en` in rmt_rx.c around line 295). Combined with the
+    // HS0038 receiver's own ~22 kΩ pull-up, the parallel resistance fights
+    // the receiver's pull-down so the "low" level only reaches ~2.6 V
+    // instead of 0 V — still above the 0.825 V high threshold, so RMT
+    // never sees a falling edge. Disabling the internal pull-up lets the
+    // receiver's own pull-up define the idle level and its output
+    // transistor drive low cleanly.
+    gpio_pullup_dis(rx_gpio_);
     ESP_LOGI(TAG, "RX channel acquired");
     return true;
 }
