@@ -186,6 +186,122 @@ void IrController::ReleaseTx() {
 }
 
 // ---------------------------------------------------------------------------
+// CaptureByPolling — busy-poll the IR receiver pin and timestamp every
+// edge, then fold the deltas into rmt_symbol_word_t[] so the rest of the
+// pipeline (NVS storage, RMT TX replay) sees the same layout.
+//
+// This replaces the broken RMT RX path on ESP32-S3 (carrier demodulation
+// + 64-symbol ping-pong buffer could not hold a full NEC/Coolix frame).
+// Polling at task priority is fine for IR: shortest pulse in NEC is
+// 560 µs, much longer than any FreeRTOS tick latency on a system that
+// is otherwise idle (this is invoked while xiaozhi is sitting in the
+// idle state waiting for the wake word).
+// ---------------------------------------------------------------------------
+
+bool IrController::CaptureByPolling(uint32_t timeout_ms) {
+    if (rx_buffer_ == nullptr) {
+        rx_buffer_ = heap_caps_malloc(kMaxSymbols * sizeof(rmt_symbol_word_t),
+                                      MALLOC_CAP_INTERNAL);
+        if (rx_buffer_ == nullptr) {
+            ESP_LOGE(TAG, "RX buffer alloc failed");
+            return false;
+        }
+    }
+    memset(rx_buffer_, 0, kMaxSymbols * sizeof(rmt_symbol_word_t));
+
+    // Baseline: read current level, wait for first edge.
+    int last_level = gpio_get_level(rx_gpio_);
+    int64_t start_us = esp_timer_get_time();
+    int64_t deadline_us = start_us + (int64_t)timeout_ms * 1000;
+    int64_t last_edge_us = start_us;
+
+    // Phase 1: wait up to 1.5 s for the first edge. If nothing happens,
+    // treat as "no signal" (avoids burning the full timeout on idle).
+    int64_t phase1_deadline_us = start_us + 1500 * 1000;
+    if (phase1_deadline_us > deadline_us) phase1_deadline_us = deadline_us;
+    bool saw_edge = false;
+    while (esp_timer_get_time() < phase1_deadline_us) {
+        int level = gpio_get_level(rx_gpio_);
+        if (level != last_level) {
+            saw_edge = true;
+            break;
+        }
+        // Yield to IDLE tasks; the wake-word detector runs at low prio
+        // and we're at task prio 5 — short yields don't lose edges at
+        // 38 kHz baseband (longest pulse-free gap for NEC repeats is
+        // ~40 ms, easily polled).
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+    if (!saw_edge) {
+        ESP_LOGW(TAG, "No first edge within 1.5 s");
+        return false;
+    }
+
+    // Phase 2: capture edges until we hit a long quiet gap (>40 ms = no
+    // more remote activity for this frame). Stop early so a stuck remote
+    // button doesn't fill the buffer with repeated frames.
+    size_t symbol_count = 0;
+    last_edge_us = esp_timer_get_time();
+    while (esp_timer_get_time() < deadline_us) {
+        int level = gpio_get_level(rx_gpio_);
+        if (level != last_level) {
+            int64_t now_us = esp_timer_get_time();
+            int64_t high_us = now_us - last_edge_us;
+            last_edge_us = now_us;
+
+            // End of a symbol's HIGH phase = start of LOW phase. We don't
+            // know the LOW duration yet — peek one more sample to fold it in.
+            int low_us = 0;
+            // Read until we see another edge or until we exceed the buffer.
+            // We can't actually peek with a single sample, so we use the
+            // duration from last_edge_us to the NEXT edge later. For now
+            // emit a placeholder and patch it on the next iteration.
+            rmt_symbol_word_t sym = {};
+            sym.duration0 = (uint16_t)(high_us > 0x7FFF ? 0x7FFF : high_us);
+            sym.level0 = (last_level == 1) ? 1 : 0;
+            if (symbol_count < kMaxSymbols) {
+                static_cast<rmt_symbol_word_t*>(rx_buffer_)[symbol_count++] = sym;
+            }
+            last_level = level;
+
+            // Long gap = frame ended.
+            if (high_us > 40000) {
+                ESP_LOGI(TAG, "End of frame (gap %lld µs)", high_us);
+                break;
+            }
+        } else {
+            // No edge yet — yield briefly to let other tasks run.
+            vTaskDelay(pdMS_TO_TICKS(1));
+        }
+    }
+
+    if (symbol_count == 0) {
+        return false;
+    }
+
+    // Fold LOW durations: each symbol's duration1 should be the gap from
+    // its HIGH edge to the next HIGH edge. Walk forward and patch.
+    auto* syms = static_cast<rmt_symbol_word_t*>(rx_buffer_);
+    for (size_t i = 0; i + 1 < symbol_count; i++) {
+        syms[i].duration1 = syms[i + 1].duration0;
+        syms[i].level1 = (syms[i + 1].level0 == 1) ? 1 : 0;
+    }
+    // Last symbol: leave duration1 as captured gap, but if we exited on
+    // gap > 40 ms the last "HIGH duration" was actually the gap — strip
+    // it off (it would corrupt playback).
+    if (symbol_count > 0 && syms[symbol_count - 1].duration0 > 40000) {
+        symbol_count--;
+    }
+    // Zero the unused tail.
+    for (size_t i = symbol_count; i < kMaxSymbols; i++) {
+        syms[i].val = 0;
+    }
+
+    ESP_LOGI(TAG, "Captured %zu raw edges", symbol_count);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // Learn (RX) — acquires RX channel, blocks up to timeout_ms, releases.
 // ---------------------------------------------------------------------------
 
@@ -205,6 +321,14 @@ bool IrController::Learn(const std::string& name, uint32_t timeout_ms) {
         restore();
         return false;
     }
+
+    // Make sure the receive pin is configured as a clean digital input
+    // (RMT's internal pull-up is disabled so the receiver's own pull-up
+    // defines the idle level).
+    gpio_set_direction(rx_gpio_, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(rx_gpio_, GPIO_FLOATING);
+    gpio_pullup_dis(rx_gpio_);
+    gpio_pulldown_dis(rx_gpio_);
 
     rmt_receive_config_t recv_cfg = {
         // ESP-IDF v5.5+ requires signal_range_min_ns < 3187 ns (≈ 3 µs).
@@ -232,27 +356,18 @@ bool IrController::Learn(const std::string& name, uint32_t timeout_ms) {
     ESP_LOGI(TAG, "Learning '%s' — point your remote at the receiver now "
                   "(timeout %lu ms)", name.c_str(), (unsigned long)timeout_ms);
 
-    const TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(timeout_ms);
-    const TickType_t head_start = xTaskGetTickCount() + pdMS_TO_TICKS(200);
-    bool got_signal = false;
-    while (xTaskGetTickCount() < deadline) {
-        if (xTaskGetTickCount() >= head_start) {
-            auto* syms = reinterpret_cast<rmt_symbol_word_t*>(rx_buffer_);
-            if (syms[0].val != 0) {
-                got_signal = true;
-                break;
-            }
-        }
-        vTaskDelay(pdMS_TO_TICKS(20));
+    // Skip the RMT RX path entirely — busy-poll the GPIO instead. The HS0038
+    // already demodulates 38 kHz internally, so the GPIO state is the baseband
+    // signal we actually want to record.
+    if (!CaptureByPolling(timeout_ms)) {
+        ESP_LOGW(TAG, "No signal captured within %lu ms", (unsigned long)timeout_ms);
+        ReleaseRx();
+        restore();
+        return false;
     }
 
     ReleaseRx();
     restore();
-
-    if (!got_signal) {
-        ESP_LOGW(TAG, "No signal captured within %lu ms", (unsigned long)timeout_ms);
-        return false;
-    }
 
     auto* syms = reinterpret_cast<rmt_symbol_word_t*>(rx_buffer_);
     size_t count = 0;
@@ -444,46 +559,21 @@ std::string IrController::Test(uint32_t rx_timeout_ms) {
         result += "  RX: FAIL (no RX GPIO or channel pool exhausted)";
         return result;
     }
-    rmt_receive_config_t recv_cfg = {
-        .signal_range_min_ns = 1000,
-        .signal_range_max_ns = 20000000,
-    };
-    esp_err_t rx_err = rmt_receive(
-        reinterpret_cast<rmt_channel_handle_t>(rx_handle_),
-        rx_buffer_, kMaxSymbols * sizeof(rmt_symbol_word_t),
-        &recv_cfg);
-    if (rx_err != ESP_OK) {
-        result += std::string("  RX: FAIL (rmt_receive ") + esp_err_to_name(rx_err) + ")";
-        ReleaseRx();
-        return result;
-    }
-
-    // Clear stale symbols (buffer is reused across calls and not zeroed
-    // by the driver) and wait at least 200 ms before polling so the RMT
-    // ISR has time to fill the buffer with actual remote data.
-    memset(rx_buffer_, 0, kMaxSymbols * sizeof(rmt_symbol_word_t));
 
     ESP_LOGI(TAG, "Test: pointing a remote at GPIO%d now", (int)rx_gpio_);
-    const TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(rx_timeout_ms);
-    const TickType_t head_start = xTaskGetTickCount() + pdMS_TO_TICKS(200);
+    bool rx_ok = CaptureByPolling(rx_timeout_ms);
     size_t captured = 0;
-    while (xTaskGetTickCount() < deadline) {
-        if (xTaskGetTickCount() >= head_start) {
-            auto* syms = reinterpret_cast<rmt_symbol_word_t*>(rx_buffer_);
-            if (syms[0].val != 0) {
-                for (size_t i = 0; i < kMaxSymbols; i++) {
-                if (syms[i].val == 0) break;
-                captured++;
-            }
-            break;
-            }
+    if (rx_ok) {
+        auto* syms = reinterpret_cast<rmt_symbol_word_t*>(rx_buffer_);
+        for (size_t i = 0; i < kMaxSymbols; i++) {
+            if (syms[i].val == 0) break;
+            captured++;
         }
-        vTaskDelay(pdMS_TO_TICKS(20));
     }
 
     char buf[96];
     snprintf(buf, sizeof(buf), "  RX: %s — captured %zu symbols; point any IR remote at GPIO%d within the window",
-             captured > 0 ? "OK" : "TIMEOUT",
+             rx_ok && captured > 0 ? "OK" : "TIMEOUT",
              captured, (int)rx_gpio_);
     result += buf;
 

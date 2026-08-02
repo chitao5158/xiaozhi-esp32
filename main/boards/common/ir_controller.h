@@ -73,6 +73,15 @@ private:
     void ReleaseRx();
     void ReleaseTx();
 
+    // Capture one IR frame on rx_gpio_ by busy-polling the pin and
+    // timestamping every edge with esp_timer_get_time(). Bypasses the RMT
+    // RX path entirely — ESP-IDF v5.5's RMT RX + carrier demodulation
+    // path on ESP32-S3 turned out to be unreliable for HS0038 receivers,
+    // so we read the (already-demodulated) baseband GPIO directly.
+    // Output is stored in rx_buffer_ in the same rmt_symbol_word_t[]
+    // layout that RMT TX consumes.
+    bool CaptureByPolling(uint32_t timeout_ms);
+
     void RegisterMcpTools();
 
     gpio_num_t rx_gpio_ = GPIO_NUM_NC;
