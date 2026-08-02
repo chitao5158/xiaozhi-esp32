@@ -83,8 +83,12 @@ private:
     // 1 µs RMT ticks give us 0.3 % resolution on a 560 µs NEC pulse — fine.
     static constexpr uint32_t kRmtResolutionHz = 1000000;
     static constexpr uint32_t kCarrierHz       = 38000;
-    // 256 symbols covers ~30 ms of NEC, enough for one frame plus repeats.
-    static constexpr size_t  kMaxSymbols       = 256;
+    // 64 symbols (~7.7 ms of NEC, one full frame is ~67). MUST stay <=
+    // SOC_RMT_MEM_WORDS_PER_CHANNEL (48) so a single RX channel can fit
+    // the entire capture; otherwise ESP-IDF's RX register code demands
+    // mem_block_num contiguous blocks, which can't be satisfied when the
+    // RX pool has only 4 channels on ESP32-S3.
+    static constexpr size_t  kMaxSymbols       = 64;
     // Maximum length of a stored signal name (NVS key limit).
     static constexpr size_t  kMaxNameLen       = 15;
     // NVS namespace used for all IR signals.
