@@ -271,7 +271,7 @@ bool IrController::CaptureByPolling(uint32_t timeout_ms) {
 
             // Long gap = frame ended.
             if (high_us > 40000) {
-                ESP_LOGI(TAG, "End of frame (gap %lld µs)", high_us);
+                ESP_LOGI(TAG, "End of frame (gap %d µs)", (int)high_us);
                 break;
             }
         } else {
@@ -302,7 +302,7 @@ bool IrController::CaptureByPolling(uint32_t timeout_ms) {
         syms[i].val = 0;
     }
 
-    ESP_LOGI(TAG, "Captured %zu raw edges", symbol_count);
+    ESP_LOGI(TAG, "Captured %u raw edges", (unsigned)symbol_count);
     return true;
 }
 
