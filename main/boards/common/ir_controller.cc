@@ -353,6 +353,90 @@ size_t IrController::Count() const {
 }
 
 // ---------------------------------------------------------------------------
+// Hardware self-test (no NVS).
+//   - Sends ~128 ms of 38 kHz carrier on TX (use phone camera to see LED).
+//   - Then opens RX and waits up to rx_timeout_ms for any captured signal.
+//   - Returns a short text summary the AI can read back to the user.
+// ---------------------------------------------------------------------------
+std::string IrController::Test(uint32_t rx_timeout_ms) {
+    std::string result = "IR self-test:\n";
+
+    // ---- TX side ----
+    if (!AcquireTx()) {
+        result += "  TX: FAIL (no TX GPIO or channel pool exhausted)\n";
+    } else {
+        // 4 chained symbols at level=1, each 32 ms → 128 ms of carrier.
+        rmt_symbol_word_t pulse[4];
+        for (int i = 0; i < 4; i++) {
+            pulse[i].duration0 = 32000;  // 32 ms (max for 15-bit duration)
+            pulse[i].level0    = 1;       // carrier on
+            pulse[i].duration1 = 0;
+            pulse[i].level1    = 0;
+        }
+        rmt_transmit_config_t tx_cfg = {
+            .loop_count = 0,
+            .flags = { .eot_level = 0, .queue_nonblocking = false },
+        };
+        esp_err_t tx_err = rmt_transmit(
+            reinterpret_cast<rmt_channel_handle_t>(tx_handle_),
+            reinterpret_cast<rmt_encoder_handle_t>(copy_encoder_),
+            pulse, sizeof(pulse), &tx_cfg);
+        if (tx_err == ESP_OK) {
+            rmt_tx_wait_all_done(
+                reinterpret_cast<rmt_channel_handle_t>(tx_handle_),
+                pdMS_TO_TICKS(500));
+            result += "  TX: OK — ~128 ms 38 kHz carrier sent; point phone camera at the LED to see it glow faintly\n";
+        } else {
+            result += std::string("  TX: FAIL (rmt_transmit ") + esp_err_to_name(tx_err) + ")\n";
+        }
+        ReleaseTx();
+    }
+
+    // ---- RX side ----
+    if (!AcquireRx()) {
+        result += "  RX: FAIL (no RX GPIO or channel pool exhausted)";
+        return result;
+    }
+    rmt_receive_config_t recv_cfg = {
+        .signal_range_min_ns = 1000,
+        .signal_range_max_ns = 20000000,
+    };
+    esp_err_t rx_err = rmt_receive(
+        reinterpret_cast<rmt_channel_handle_t>(rx_handle_),
+        rx_buffer_, kMaxSymbols * sizeof(rmt_symbol_word_t),
+        &recv_cfg);
+    if (rx_err != ESP_OK) {
+        result += std::string("  RX: FAIL (rmt_receive ") + esp_err_to_name(rx_err) + ")";
+        ReleaseRx();
+        return result;
+    }
+
+    ESP_LOGI(TAG, "Test: pointing a remote at GPIO%d now", (int)rx_gpio_);
+    const TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(rx_timeout_ms);
+    size_t captured = 0;
+    while (xTaskGetTickCount() < deadline) {
+        auto* syms = reinterpret_cast<rmt_symbol_word_t*>(rx_buffer_);
+        if (syms[0].val != 0) {
+            for (size_t i = 0; i < kMaxSymbols; i++) {
+                if (syms[i].val == 0) break;
+                captured++;
+            }
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+
+    char buf[96];
+    snprintf(buf, sizeof(buf), "  RX: %s — captured %zu symbols; point any IR remote at GPIO%d within the window",
+             captured > 0 ? "OK" : "TIMEOUT",
+             captured, (int)rx_gpio_);
+    result += buf;
+
+    ReleaseRx();
+    return result;
+}
+
+// ---------------------------------------------------------------------------
 // MCP tools
 // ---------------------------------------------------------------------------
 
@@ -411,5 +495,17 @@ void IrController::RegisterMcpTools() {
         [this](const PropertyList& properties) -> ReturnValue {
             std::string name = properties["name"].value<std::string>();
             return Delete(name);
+        });
+
+    mcp.AddTool(
+        "self.ir.test",
+        "Hardware self-test for the IR module. Pulses the TX LED with "
+        "~128 ms of 38 kHz carrier (look at it through a phone camera — "
+        "you should see a faint purple glow), then opens the RX and waits "
+        "for any remote signal. Does NOT touch NVS.",
+        PropertyList({Property("rx_timeout_ms", kPropertyTypeInteger, 1000, 15000)}),
+        [this](const PropertyList& properties) -> ReturnValue {
+            int timeout = properties["rx_timeout_ms"].value<int>();
+            return Test(static_cast<uint32_t>(timeout));
         });
 }

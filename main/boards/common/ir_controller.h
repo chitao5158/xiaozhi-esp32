@@ -41,6 +41,13 @@ public:
     // a short gap so the appliance picks it up reliably).
     bool Send(const std::string& name, uint32_t repeats = 2);
 
+    // Hardware self-test: pulses the TX GPIO at 38 kHz for ~500 ms (use
+    // a phone camera to confirm the IR LED is wired and working), then
+    // opens the RX channel and reports how many symbols it captures within
+    // `timeout_ms` (point any remote at the receiver). Does NOT touch NVS.
+    // Returns a short human-readable summary string.
+    std::string Test(uint32_t rx_timeout_ms = 3000);
+
     // Delete a single signal. Returns true if it existed.
     bool Delete(const std::string& name);
 
