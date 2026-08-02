@@ -301,6 +301,9 @@
 // IR receiver (e.g. HS0038 / VS1838B) OUT pin and IR LED anode (via a
 // 33-100 Ω resistor to GPIO). GPIO_NUM_NC disables that direction.
 #define IR_RX_GPIO GPIO_NUM_2
-#define IR_TX_GPIO GPIO_NUM_12
+// GPIO_NUM_11 (was GPIO_NUM_12 — that pin turned out to be dragged low by
+// a shorted KY-005 module on the bench; switched to 11 to isolate GPIO
+// vs module fault).
+#define IR_TX_GPIO GPIO_NUM_11
 
 #endif // _BOARD_CONFIG_H_
