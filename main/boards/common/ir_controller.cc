@@ -77,6 +77,15 @@ bool IrController::AcquireRx() {
         rx_handle_ = nullptr;
         return false;
     }
+    // ESP-IDF v5.5+ RMT API requires explicit enable before receive. Without
+    // this, rmt_receive() fails with "channel not in enable state" (esp_err
+    // 0x3007 / ESP_ERR_INVALID_STATE).
+    if (rmt_enable(reinterpret_cast<rmt_channel_handle_t>(rx_handle_)) != ESP_OK) {
+        ESP_LOGE(TAG, "rmt_enable (RX) failed");
+        rmt_del_channel(reinterpret_cast<rmt_channel_handle_t>(rx_handle_));
+        rx_handle_ = nullptr;
+        return false;
+    }
     ESP_LOGI(TAG, "RX channel acquired");
     return true;
 }
@@ -116,6 +125,12 @@ bool IrController::AcquireTx() {
     if (rmt_new_copy_encoder(&copy_cfg,
                              reinterpret_cast<rmt_encoder_handle_t*>(&copy_encoder_)) != ESP_OK) {
         ESP_LOGE(TAG, "rmt_new_copy_encoder failed");
+        ReleaseTx();
+        return false;
+    }
+    // ESP-IDF v5.5+ RMT API requires explicit enable before transmit.
+    if (rmt_enable(reinterpret_cast<rmt_channel_handle_t>(tx_handle_)) != ESP_OK) {
+        ESP_LOGE(TAG, "rmt_enable (TX) failed");
         ReleaseTx();
         return false;
     }
