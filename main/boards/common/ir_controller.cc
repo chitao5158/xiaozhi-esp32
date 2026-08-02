@@ -214,6 +214,11 @@ bool IrController::Learn(const std::string& name, uint32_t timeout_ms) {
         .signal_range_min_ns = 1000,
         .signal_range_max_ns = 20000000,
     };
+    // Clear stale symbols from any previous Receive call. The buffer is
+    // reused across calls and is never zeroed by the driver; without this,
+    // leftover symbols from an earlier capture would trigger an immediate
+    // "got_signal = true" on the very first poll.
+    memset(rx_buffer_, 0, kMaxSymbols * sizeof(rmt_symbol_word_t));
     esp_err_t err = rmt_receive(reinterpret_cast<rmt_channel_handle_t>(rx_handle_),
                                 rx_buffer_, kMaxSymbols * sizeof(rmt_symbol_word_t),
                                 &recv_cfg);
@@ -453,17 +458,25 @@ std::string IrController::Test(uint32_t rx_timeout_ms) {
         return result;
     }
 
+    // Clear stale symbols (buffer is reused across calls and not zeroed
+    // by the driver) and wait at least 200 ms before polling so the RMT
+    // ISR has time to fill the buffer with actual remote data.
+    memset(rx_buffer_, 0, kMaxSymbols * sizeof(rmt_symbol_word_t));
+
     ESP_LOGI(TAG, "Test: pointing a remote at GPIO%d now", (int)rx_gpio_);
     const TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(rx_timeout_ms);
+    const TickType_t head_start = xTaskGetTickCount() + pdMS_TO_TICKS(200);
     size_t captured = 0;
     while (xTaskGetTickCount() < deadline) {
-        auto* syms = reinterpret_cast<rmt_symbol_word_t*>(rx_buffer_);
-        if (syms[0].val != 0) {
-            for (size_t i = 0; i < kMaxSymbols; i++) {
+        if (xTaskGetTickCount() >= head_start) {
+            auto* syms = reinterpret_cast<rmt_symbol_word_t*>(rx_buffer_);
+            if (syms[0].val != 0) {
+                for (size_t i = 0; i < kMaxSymbols; i++) {
                 if (syms[i].val == 0) break;
                 captured++;
             }
             break;
+            }
         }
         vTaskDelay(pdMS_TO_TICKS(20));
     }
