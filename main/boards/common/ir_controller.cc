@@ -165,7 +165,11 @@ bool IrController::Learn(const std::string& name, uint32_t timeout_ms) {
     }
 
     rmt_receive_config_t recv_cfg = {
-        .signal_range_min_ns = 1000000,
+        // ESP-IDF v5.5+ requires signal_range_min_ns < 3187 ns (≈ 3 µs).
+        // Values like 1000000 (1 ms) trip ESP_ERR_INVALID_ARG. 1000 ns is
+        // the smallest practical width for noise filtering at 1 MHz RMT
+        // resolution; pulses shorter than 1 µs are essentially glitches.
+        .signal_range_min_ns = 1000,
         .signal_range_max_ns = 20000000,
     };
     esp_err_t err = rmt_receive(reinterpret_cast<rmt_channel_handle_t>(rx_handle_),
