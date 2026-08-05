@@ -66,6 +66,7 @@ list(APPEND SOURCES
     "boards/common/command_server.cc"
     "boards/common/motor_controller.cc"
     "boards/common/ir_controller.cc"
+    "boards/common/ir_uart_link.cc"
 )
 if(CONFIG_XIAOZHI_USE_ETHERNET)
     list(APPEND SOURCES "boards/common/ethernet_board.cc")

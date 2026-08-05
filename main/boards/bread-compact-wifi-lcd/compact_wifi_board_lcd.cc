@@ -253,11 +253,10 @@ private:
                                      LEDC_TIMER_1, LEDC_CHANNEL_1, LEDC_CHANNEL_2);
 
 #if CONFIG_USE_IR_CONTROLLER
-        // Capture / replay 38 kHz IR remote signals for AC / TV control.
-        // Pin configuration lives in config.h — set either GPIO to
-        // GPIO_NUM_NC to disable that direction.
+        // YS-IRTM UART bridge module handles IR RX + TX + 38 kHz modulation.
+        // ESP32 talks to it over UART2: TX→GPIO12, RX→GPIO2.
         static IrController& ir = IrController::GetInstance();
-        static int ir_init_once = (ir.Configure(IR_RX_GPIO, IR_TX_GPIO), 0);
+        static int ir_init_once = (ir.Configure(IR_UART_TX_GPIO, IR_UART_RX_GPIO), 0);
         (void)ir_init_once;
 #endif
 

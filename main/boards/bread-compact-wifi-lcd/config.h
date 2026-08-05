@@ -298,12 +298,13 @@
 #define MOTOR_IA_GPIO GPIO_NUM_17
 #define MOTOR_IB_GPIO GPIO_NUM_8
 
-// IR receiver (e.g. HS0038 / VS1838B) OUT pin and IR LED anode (via a
-// 33-100 Ω resistor to GPIO). GPIO_NUM_NC disables that direction.
-#define IR_RX_GPIO GPIO_NUM_2
-// GPIO_NUM_11 (was GPIO_NUM_12 — that pin turned out to be dragged low by
-// a shorted KY-005 module on the bench; switched to 11 to isolate GPIO
-// vs module fault).
-#define IR_TX_GPIO GPIO_NUM_11
+// IR over YS-IRTM UART bridge module — its own RX/TX head + 38 kHz
+// modulator, ESP32 just talks UART. GPIO_NUM_NC disables both the
+// on-board HS0038 receiver and the (now shorted) KY-005 emitter.
+#define IR_RX_GPIO GPIO_NUM_NC
+#define IR_TX_GPIO GPIO_NUM_NC
+// UART2 GPIOs the YS-IRTM is wired to (TXD→GPIO12, RXD→GPIO2).
+#define IR_UART_TX_GPIO GPIO_NUM_12
+#define IR_UART_RX_GPIO GPIO_NUM_2
 
 #endif // _BOARD_CONFIG_H_
